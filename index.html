@@ -197,9 +197,8 @@
       text-align: center;
     }
 
-    /* 登录后假首页内容 */
     .app {
-      display: none; /* 登录成功再显示 */
+      display: none;
       margin-top: 12px;
       border-top: 1px dashed #eee;
       padding-top: 12px;
@@ -231,11 +230,23 @@
       background: #f6ffed;
       color: #52c41a;
     }
+
+    /* 页脚链接样式 */
+    .footer-link {
+      text-align: center;
+      margin-top: 20px;
+      font-size: 13px;
+      color: #fff;
+    }
+    .footer-link a {
+      color: #fff;
+      text-decoration: underline;
+    }
   </style>
 </head>
 <body>
   <div class="wrapper">
-    <!-- 左侧：系统介绍 + 假数据看板 -->
+    <!-- 左侧内容 -->
     <div class="left">
       <div class="system-title">
         智能考勤系统
@@ -270,7 +281,7 @@
       </ul>
     </div>
 
-    <!-- 右侧：登录 + 登录后假首页 -->
+    <!-- 右侧：登录模块 -->
     <div class="right">
       <div class="right-title">账号登录</div>
       <div class="right-subtitle">本页面为静态展示，登录逻辑由前端模拟</div>
@@ -293,7 +304,6 @@
         <div class="hint">提示：仅用于 UI 展示，不产生真实数据</div>
       </form>
 
-      <!-- 登录成功后展示的假首页模块 -->
       <div class="app" id="app">
         <div class="app-title">今日考勤记录（示例数据）</div>
         <table class="table">
@@ -334,13 +344,19 @@
     </div>
   </div>
 
+  <!-- 页脚链接 -->
+  <div class="footer-link">
+    <a href="https://tierhive.com/r/E99CCFFBF1EA" target="_blank">
+      Hosted on TierHive Hourly VPS
+    </a>
+  </div>
+
   <script>
     const form = document.getElementById('login-form');
     const btn = document.getElementById('login-btn');
     const errorMsg = document.getElementById('error-msg');
     const app = document.getElementById('app');
 
-    // 固定演示账号
     const DEMO_USER = 'admin';
     const DEMO_PASS = '123456';
 
@@ -352,26 +368,16 @@
       const username = form.username.value.trim();
       const password = form.password.value;
 
-      // 假登录逻辑：只在前端判断，不请求后端
       setTimeout(() => {
         if (username === DEMO_USER && password === DEMO_PASS) {
-          // 登录成功：隐藏表单，展示假首页内容
           form.style.display = 'none';
           app.style.display = 'block';
         } else {
           errorMsg.textContent = '账号或密码错误（演示账号：admin / 123456）';
         }
         btn.disabled = false;
-      }, 500); // 加一点延迟，模拟请求过程
+      }, 500);
     });
   </script>
-<div class="footer-link">
-  <a href="https://tierhive.com/r/E99CCFFBF1EA" target="_blank">
-    Hosted on TierHive Hourly VPS
-  </a>
-</div>
-
 </body>
 </html>
-
-
