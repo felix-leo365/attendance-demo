@@ -231,7 +231,6 @@
       color: #52c41a;
     }
 
-    /* 页脚链接样式 */
     .footer-link {
       text-align: center;
       margin-top: 20px;
@@ -246,14 +245,13 @@
 </head>
 <body>
   <div class="wrapper">
-    <!-- 左侧内容 -->
+    <!-- 内容部分 -->
     <div class="left">
       <div class="system-title">
         智能考勤系统
         <span class="badge">Demo 展示</span>
       </div>
       <div class="desc">支持人脸识别 / 地理围栏 / 异常提醒的企业级考勤解决方案，本页面仅为效果演示。</div>
-
       <div class="kpis">
         <div class="kpi-card">
           <div class="kpi-label">今日打卡人数</div>
@@ -271,7 +269,6 @@
           <div class="kpi-tag" style="color:#f5222d;">异常预警</div>
         </div>
       </div>
-
       <div class="timeline-title">最近打卡动态（示意）</div>
       <ul class="timeline">
         <li><span class="dot"></span>09:01 王* - 前台人脸识别打卡</li>
@@ -281,103 +278,6 @@
       </ul>
     </div>
 
-    <!-- 右侧：登录模块 -->
     <div class="right">
       <div class="right-title">账号登录</div>
-      <div class="right-subtitle">本页面为静态展示，登录逻辑由前端模拟</div>
-
-      <form id="login-form">
-        <div class="field">
-          <label for="username">账号</label>
-          <input id="username" name="username" placeholder="请输入账号，例如 admin" required />
-        </div>
-        <div class="field">
-          <label for="password">密码</label>
-          <input id="password" name="password" type="password" placeholder="请输入密码，例如 123456" required />
-        </div>
-        <div class="login-extra">
-          <span>演示账号：<b>admin / 123456</b></span>
-          <span>忘记密码？</span>
-        </div>
-        <button type="submit" class="btn" id="login-btn">登录</button>
-        <div class="error" id="error-msg"></div>
-        <div class="hint">提示：仅用于 UI 展示，不产生真实数据</div>
-      </form>
-
-      <div class="app" id="app">
-        <div class="app-title">今日考勤记录（示例数据）</div>
-        <table class="table">
-          <thead>
-            <tr>
-              <th>姓名</th>
-              <th>部门</th>
-              <th>上班打卡</th>
-              <th>下班打卡</th>
-              <th>状态</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>王小明</td>
-              <td>技术部</td>
-              <td>09:00</td>
-              <td>18:02</td>
-              <td><span class="tag-status">正常</span></td>
-            </tr>
-            <tr>
-              <td>李丽</td>
-              <td>产品部</td>
-              <td>09:05</td>
-              <td>18:10</td>
-              <td><span class="tag-status" style="background:#fff7e6;color:#fa8c16;">迟到</span></td>
-            </tr>
-            <tr>
-              <td>张强</td>
-              <td>运营部</td>
-              <td>-</td>
-              <td>-</td>
-              <td><span class="tag-status" style="background:#fff1f0;color:#f5222d;">缺勤</span></td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-
-  <!-- 页脚链接 -->
-  <div class="footer-link">
-    <a href="https://tierhive.com/r/E99CCFFBF1EA" target="_blank">
-      Hosted on TierHive Hourly VPS
-    </a>
-  </div>
-
-  <script>
-    const form = document.getElementById('login-form');
-    const btn = document.getElementById('login-btn');
-    const errorMsg = document.getElementById('error-msg');
-    const app = document.getElementById('app');
-
-    const DEMO_USER = 'admin';
-    const DEMO_PASS = '123456';
-
-    form.addEventListener('submit', function (e) {
-      e.preventDefault();
-      errorMsg.textContent = '';
-      btn.disabled = true;
-
-      const username = form.username.value.trim();
-      const password = form.password.value;
-
-      setTimeout(() => {
-        if (username === DEMO_USER && password === DEMO_PASS) {
-          form.style.display = 'none';
-          app.style.display = 'block';
-        } else {
-          errorMsg.textContent = '账号或密码错误（演示账号：admin / 123456）';
-        }
-        btn.disabled = false;
-      }, 500);
-    });
-  </script>
-</body>
-</html>
+      <div class="right-subtitle">本页面为静态展示，登录逻辑由前端模
