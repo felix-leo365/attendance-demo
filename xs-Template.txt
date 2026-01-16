@@ -1,0 +1,584 @@
+// ==UserScript==
+// @name         🌸 XServer VPS 续期助手 (Sakura V2.0)
+// @namespace    XSERVER-RENEW-VPS
+// @version      2.0
+// @description  XS-VPS专用
+// @author       零·计划研究所👾-C4
+// @match        https://secure.xserver.ne.jp/*
+// @connect      api.telegram.org
+// @connect      captcha-120546510085.asia-northeast1.run.app
+// @grant        GM_xmlhttpRequest
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_addStyle
+// @run-at       document-idle
+// ==/UserScript==
+
+(async function() {
+    'use strict';
+
+    //===========================================================================
+    //  ⚙️⚙️⚙️ 用户配置 (脚本作者：零·计划研究所👾-C4) ⚙️⚙️⚙️
+    //===========================================================================
+    const CONFIG = {
+        // 🟢 账号信息 (必填)
+        EMAIL: "",      // 例如: your_email@example.com
+        PASSWORD: "",   // 例如: your_password
+
+        // 🔵 Telegram 推送配置 (选填，不填则不推送)
+        TG_TOKEN: "",   // 例如: 123456789:ABCDefGhI...
+        TG_ID: "",      // 例如: 12345678
+
+        // 🟡 系统配置
+        CAPTCHA_API: "https://captcha-120546510085.asia-northeast1.run.app",
+        LOGIN_URL: "https://secure.xserver.ne.jp/xapanel/login/xvps"
+    };
+    //===========================================================================
+
+
+    //===================== 核心状态管理 ======================//
+    const STORE = {
+        get logs() { return GM_getValue('xs_logs', []); },
+        set logs(val) { GM_setValue('xs_logs', val.slice(-50)); },
+        get lastRunDate() { return GM_getValue('xs_last_run_date', ''); },
+        set lastRunDate(val) { GM_setValue('xs_last_run_date', val); },
+        get nextRunDate() { return GM_getValue('xs_next_run_date', ''); },
+        set nextRunDate(val) { GM_setValue('xs_next_run_date', val); },
+        
+        get isPaused() { return GM_getValue('xs_is_paused', false); },
+        set isPaused(val) { GM_setValue('xs_is_paused', val); },
+        get forceRun() { return GM_getValue('xs_force_run', false); },
+        set forceRun(val) { GM_setValue('xs_force_run', val); },
+        get expiryDate() { return GM_getValue('xs_expiry_date', '未知'); },
+        set expiryDate(val) { GM_setValue('xs_expiry_date', val); }
+    };
+
+    //===================== 工具函数 ======================//
+    const wait = ms => new Promise(r => setTimeout(r, ms));
+    
+    function formatDate(rawStr) {
+        if (!rawStr) return "未知";
+        const match = rawStr.match(/(\d{4})[-./年](\d{1,2})[-./月](\d{1,2})/);
+        if (match) {
+            const y = match[1];
+            const m = match[2].padStart(2, '0');
+            const d = match[3].padStart(2, '0');
+            return `${y}-${m}-${d}`;
+        }
+        return rawStr;
+    }
+
+    function sendTg(text) {
+        if (!CONFIG.TG_TOKEN || !CONFIG.TG_ID) return;
+        
+        const today = getBeijingDate().dateStr;
+        const msg = `🌸 <b>XServer VPS 续期助手</b>\n\n` +
+                    `🚀 <b>运行日期:</b> ${today}\n` +
+                    `📅 <b>下次续期:</b> ${STORE.nextRunDate || '未知'}\n` + 
+                    `⏳ <b>利用期限:</b> ${STORE.expiryDate}\n` +
+                    `📝 <b>续期结果:</b> ${text}\n` +
+                    `📧 <b>当前账号:</b> ${CONFIG.EMAIL}`;
+
+        const url = `https://api.telegram.org/bot${CONFIG.TG_TOKEN}/sendMessage?chat_id=${CONFIG.TG_ID}&text=${encodeURIComponent(msg)}&parse_mode=HTML`;
+        GM_xmlhttpRequest({ method: "GET", url: url, onerror: (e) => console.error("TG Fail", e) });
+    }
+
+    const getBeijingDate = () => {
+        const d = new Date();
+        const utc = d.getTime() + (d.getTimezoneOffset() * 60000);
+        const bjDate = new Date(utc + (3600000 * 8));
+        const y = bjDate.getFullYear();
+        const m = String(bjDate.getMonth() + 1).padStart(2, '0');
+        const day = String(bjDate.getDate()).padStart(2, '0');
+        return {
+            full: bjDate,
+            dateStr: `${y}-${m}-${day}`,
+            hour: bjDate.getHours()
+        };
+    };
+
+    async function ocrSolve(imgDataUrl) {
+        return new Promise(resolve => {
+            GM_xmlhttpRequest({
+                method: "POST",
+                url: CONFIG.CAPTCHA_API,
+                headers: { "Content-Type": "text/plain" },
+                data: imgDataUrl,
+                onload: r => {
+                    let match = r.responseText.match(/\d+/);
+                    resolve(match ? match[0] : "");
+                },
+                onerror: () => resolve("")
+            });
+        });
+    }
+
+    function extractNextAllowedDate() {
+        try {
+            const bodyText = document.body.innerText;
+            let match = bodyText.match(/(\d{4})[-./年](\d{1,2})[-./月](\d{1,2})日?.*から.*可能/);
+            if (!match) {
+                match = bodyText.match(/利用を継続される場合は[、,\s]*(\d{4})[-./年](\d{1,2})[-./月](\d{1,2})/);
+            }
+            if (match) return formatDate(match[0]);
+        } catch(e) { console.error("排期提取错误", e); }
+        return null;
+    }
+
+    function extractExactExpiry() {
+        try {
+            const allElements = Array.from(document.querySelectorAll('th, td, dt, dd, div'));
+            const labelEl = allElements.find(el => el.innerText.includes("利用期限") && el.children.length === 0);
+            
+            if (labelEl) {
+                const parentRow = labelEl.parentElement; 
+                if (parentRow) {
+                    const rowText = parentRow.innerText;
+                    const dateMatch = rowText.match(/20\d{2}[-./年]\d{1,2}[-./月]\d{1,2}/);
+                    if (dateMatch) return formatDate(dateMatch[0]);
+                }
+            }
+            const classEl = document.querySelector(".contract__term");
+            if (classEl && classEl.innerText.match(/20\d{2}/)) {
+                return formatDate(classEl.innerText.trim());
+            }
+        } catch(e) { console.error("日期提取错误", e); }
+        return null;
+    }
+
+    function extractNewExpiryFromConf() {
+        try {
+            const ths = Array.from(document.querySelectorAll('th'));
+            const targetTh = ths.find(th => th.innerText.includes('更新後の利用期限'));
+            if (targetTh) {
+                const td = targetTh.nextElementSibling; 
+                if (td) return formatDate(td.innerText.trim());
+            }
+        } catch(e) { console.error("新日期提取错误", e); }
+        return null;
+    }
+
+    //===================== UI 面板系统 ======================//
+    const UI = {
+        init() {
+            GM_addStyle(`
+                #xs-panel { 
+                    position: fixed; bottom: 20px; right: 20px; width: 280px; 
+                    background: rgba(255, 255, 255, 0.98); 
+                    color: #444; 
+                    z-index: 99999; 
+                    border-radius: 12px; 
+                    box-shadow: 0 5px 25px rgba(255, 183, 178, 0.5); 
+                    font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+                    font-size: 13px; 
+                    transition: all 0.3s; 
+                    border: 1px solid #ffd1d1;
+                }
+                #xs-header { 
+                    padding: 10px 15px; 
+                    background: linear-gradient(135deg, #ff9a9e 0%, #ffc3a0 100%); 
+                    border-radius: 12px 12px 0 0; 
+                    display: flex; justify-content: space-between; align-items: center; 
+                    cursor: pointer; 
+                    color: #fff; text-shadow: 0 1px 1px rgba(0,0,0,0.1);
+                    font-weight: 600;
+                }
+                #xs-title { font-size: 13px; letter-spacing: 0.5px; }
+                #xs-content { padding: 12px; max-height: 400px; overflow-y: auto; }
+                .xs-row { margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; gap: 5px; line-height: 1.5; }
+                .xs-label { color: #666; font-size: 12px; }
+                .xs-val { font-family: "SF Mono", "Consolas", "Liberation Mono", Menlo, monospace; font-weight: bold; color: #333; font-size: 13px; }
+                .xs-btn { flex: 1; padding: 6px 2px; border: none; border-radius: 6px; cursor: pointer; color: white; font-weight: 600; transition: all 0.2s; font-size: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+                .xs-btn:hover { opacity: 0.9; transform: translateY(-1px); }
+                .btn-start { background: #00b894; background-image: linear-gradient(to right, #00b894, #55efc4); }
+                .btn-pause { background: #ff7675; background-image: linear-gradient(to right, #ff7675, #fab1a0); }
+                .btn-run { background: #6c5ce7; background-image: linear-gradient(to right, #6c5ce7, #a29bfe); }
+                .btn-clear { background: #dfe6e9; color: #636e72; border: 1px solid #b2bec3; flex: 0.5; box-shadow: none; }
+                #xs-logs { height: 130px; overflow-y: scroll; background: #fff5f7; padding: 8px; border: 1px solid #ffe3e3; border-radius: 8px; font-family: "SF Mono", "Consolas", "Liberation Mono", monospace; white-space: pre-wrap; margin-top: 10px; color: #555; font-size: 11px; }
+                .log-line { margin: 3px 0; border-bottom: 1px dashed #ffd1ff; padding-bottom: 2px; }
+                .log-time { color: #ff6b6b; margin-right: 6px; }
+                .hl-date { color: #e17055; }
+                #xs-logs::-webkit-scrollbar { width: 4px; }
+                #xs-logs::-webkit-scrollbar-thumb { background: #ffb7b2; border-radius: 2px; }
+            `);
+
+            const panel = document.createElement('div');
+            panel.id = 'xs-panel';
+            panel.innerHTML = `
+                <div id="xs-header">
+                    <span id="xs-title">🌸 XS-VPS V2.0</span>
+                    <span id="xs-status">Checking...</span>
+                </div>
+                <div id="xs-content">
+                    <div class="xs-row">
+                        <span class="xs-label">🚀 运行日期</span>
+                        <span id="xs-last-run" class="xs-val">${STORE.lastRunDate || '无记录'}</span>
+                    </div>
+                    <div class="xs-row">
+                        <span class="xs-label">📅 下次续期</span>
+                        <span id="xs-next-run" class="xs-val" style="color:#a29bfe;">${STORE.nextRunDate || '无计划'}</span>
+                    </div>
+                    <div class="xs-row">
+                        <span class="xs-label">⏳ 利用期限</span>
+                        <span id="xs-expiry" class="xs-val hl-date">${STORE.expiryDate}</span>
+                    </div>
+                    <div class="xs-row" style="margin-top:10px;">
+                        <button id="xs-toggle-btn" class="xs-btn ${STORE.isPaused ? 'btn-start' : 'btn-pause'}">
+                            ${STORE.isPaused ? '▶ 继续' : '⏸ 暂停'}
+                        </button>
+                        <button id="xs-run-btn" class="xs-btn btn-run">🚀 立即运行</button>
+                        <button id="xs-clear-btn" class="xs-btn btn-clear">清空</button>
+                    </div>
+                    <div id="xs-logs"></div>
+                </div>
+            `;
+            document.body.appendChild(panel);
+
+            document.getElementById('xs-toggle-btn').onclick = () => {
+                STORE.isPaused = !STORE.isPaused;
+                location.reload();
+            };
+            document.getElementById('xs-clear-btn').onclick = () => {
+                STORE.logs = [];
+                UI.renderLogs();
+            };
+            document.getElementById('xs-run-btn').onclick = () => {
+                if(confirm('⚠️ 确定要强制执行一次吗？\n这将忽略时间和今日记录，立即开始。')) {
+                    STORE.forceRun = true;
+                    STORE.lastRunDate = "";
+                    STORE.nextRunDate = ""; 
+                    STORE.isPaused = false;
+                    UI.log("🚀 指令已接收: 准备强制运行...");
+                    setTimeout(() => { location.href = CONFIG.LOGIN_URL; }, 500);
+                }
+            };
+
+            UI.renderLogs();
+            UI.updateStatus();
+        },
+
+        log(msg) {
+            const currentLogs = STORE.logs;
+            const lastEntry = currentLogs[currentLogs.length - 1] || "";
+            const lastContentMatch = lastEntry.match(/^\[.*?\] (.*)/);
+            const lastContent = lastContentMatch ? lastContentMatch[1] : "";
+
+            if (msg === lastContent) return; 
+
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+            const logEntry = `[${timeStr}] ${msg}`;
+            
+            console.log(logEntry);
+            currentLogs.push(logEntry);
+            STORE.logs = currentLogs;
+            UI.renderLogs();
+        },
+
+        renderLogs() {
+            const container = document.getElementById('xs-logs');
+            if(!container) return;
+            container.innerHTML = STORE.logs.map(l => {
+                const parts = l.match(/^\[(.*?)\] (.*)/);
+                return parts ? `<div class="log-line"><span class="log-time">${parts[1]}</span>${parts[2]}</div>` : `<div>${l}</div>`;
+            }).reverse().join('');
+        },
+
+        updateStatus(statusText) {
+            const el = document.getElementById('xs-status');
+            const btn = document.getElementById('xs-toggle-btn');
+            if (STORE.isPaused) {
+                if(el) el.innerText = "⛔ 已暂停";
+                if(btn) { btn.className = "xs-btn btn-start"; btn.innerText = "▶ 继续"; }
+            } else {
+                if(el) el.innerText = statusText || "⚡ 运行中";
+                if(btn) { btn.className = "xs-btn btn-pause"; btn.innerText = "⏸ 暂停"; }
+            }
+        },
+        
+        updateExpiry(date) {
+            const formatted = formatDate(date);
+            STORE.expiryDate = formatted;
+            const el = document.getElementById('xs-expiry');
+            if(el) el.innerText = formatted;
+        }
+    };
+
+    //===================== 逻辑控制器 ======================//
+
+    UI.init();
+
+    if (STORE.isPaused) {
+        UI.log("脚本已暂停，停止执行操作。");
+        return;
+    }
+
+    const bjTime = getBeijingDate();
+    const isLoginUrl = location.href.includes("/login/xvps");
+
+    // --- 调度逻辑 ---
+    if (isLoginUrl) {
+        if (STORE.forceRun) {
+            UI.log("🚀 检测到强制运行指令，跳过调度检查！");
+            STORE.forceRun = false;
+        } else {
+            if (STORE.nextRunDate && bjTime.dateStr < STORE.nextRunDate) {
+                UI.updateStatus("⏳ 预约等待");
+                UI.log(`⏭️ 已预约于 [${STORE.nextRunDate}] 续期，今日跳过。`);
+                setTimeout(() => location.reload(), 3600 * 1000 * 4); 
+                return;
+            }
+
+            if (STORE.lastRunDate === bjTime.dateStr) {
+                UI.updateStatus("💤 待机中");
+                UI.log(`今日 (${bjTime.dateStr}) 任务已处理`); 
+                setTimeout(() => location.reload(), 3600 * 1000); 
+                return;
+            }
+
+            // ⚠️ 已移除每日 9 点的判断，只要日期符合，立即运行
+            UI.log("⚡ 日期符合，立即开始执行任务！");
+        }
+    }
+
+    // --- 业务逻辑路由 ---
+
+    // ① 登录页面
+    if (location.href.includes("/login/xvps")) {
+        UI.log("检测到登录页面，准备登录...");
+        await wait(1000);
+        const emailInput = document.querySelector("input[name='memberid']");
+        const passInput = document.querySelector("input[name='user_password']");
+        const submitBtn = document.querySelector("input[type='submit']");
+        if (emailInput && passInput && submitBtn) {
+            if (!CONFIG.EMAIL || !CONFIG.PASSWORD) {
+                 UI.log("❌ 错误：请在脚本配置中填入账号密码！");
+                 return;
+            }
+            emailInput.value = CONFIG.EMAIL;
+            passInput.value = CONFIG.PASSWORD;
+            submitBtn.click();
+        }
+    }
+
+    // ② 首页
+    else if (location.href.includes("/xapanel/xvps/index")) {
+        UI.log("首页: 等待服务器状态变为 [稼働中]...");
+        
+        let runningStatus = null;
+        for (let i = 0; i < 120; i++) { 
+            const statusDivs = Array.from(document.querySelectorAll('div.on'));
+            runningStatus = statusDivs.find(el => el.innerText.includes('稼働中'));
+            if (runningStatus) {
+                UI.log("✅ 检测到 [稼働中] 状态，准备执行...");
+                break;
+            }
+            await wait(1000);
+        }
+
+        if (!runningStatus) UI.log("⚠️ 超时未检测到 [稼働中] 状态。");
+
+        const exactDate = extractExactExpiry();
+        if (exactDate) {
+            UI.updateExpiry(exactDate);
+            UI.log(`📅 利用期限: ${exactDate}`); 
+        }
+
+        if (STORE.lastRunDate === bjTime.dateStr && !STORE.forceRun) {
+            UI.log("✅ 今日任务已完成，停止重复跳转。");
+            UI.log("💤 3秒后返回登录页待机...");
+            await wait(3000);
+            location.href = CONFIG.LOGIN_URL;
+            return;
+        }
+
+        UI.log("🔍 正在自动寻找详情页链接...");
+        const detailLink = document.querySelector("a[href*='/server/detail?id=']");
+        if (detailLink) {
+            const foundId = detailLink.href.match(/id=(\d+)/)[1];
+            UI.log(`✅ 找到服务器 ID: ${foundId}，跳转中...`);
+            await wait(500); 
+            detailLink.click();
+        } else {
+            UI.log("❌ 错误：未找到任何服务器详情链接！");
+            const manageBtn = Array.from(document.querySelectorAll("a")).find(el => el.innerText.includes("VPS管理"));
+            if (manageBtn) {
+                UI.log("🔄 尝试点击 [VPS管理] 按钮...");
+                manageBtn.click();
+            }
+        }
+    }
+
+    // ③ 详情页
+    else if (location.href.includes("/server/detail")) {
+        UI.log("详情页: 检查状态...");
+        await wait(1000);
+
+        if (STORE.lastRunDate === bjTime.dateStr && !STORE.forceRun) {
+            UI.log("✅ 检测到今日任务已完成，停止操作。");
+            setTimeout(() => { location.href = CONFIG.LOGIN_URL; }, 2000);
+            return;
+        }
+
+        const exactDate = extractExactExpiry();
+        if (exactDate) {
+            UI.updateExpiry(exactDate);
+            UI.log(`📅 详情页抓取到期时间: ${exactDate}`);
+        }
+
+        await wait(1000);
+
+        // 🟢 智能排期捕获 (详情页)
+        if (document.body.innerText.includes("利用期限の1日前から") || document.body.innerText.includes("更新手続きが可能")) {
+            UI.log("⚠️ 提示: 未到续期时间 (需提前1天)");
+            
+            const nextDate = extractNextAllowedDate();
+            if (nextDate) {
+                STORE.nextRunDate = nextDate;
+                UI.log(`📅 已设置预约：下次运行时间锁定为 [${nextDate}]`);
+            }
+
+            if (STORE.lastRunDate !== bjTime.dateStr) sendTg(`⚠️ 未到续期时间。`); 
+            STORE.lastRunDate = getBeijingDate().dateStr; 
+            setTimeout(() => { location.href = CONFIG.LOGIN_URL; }, 5000);
+            return;
+        }
+
+        const updateBtn = Array.from(document.querySelectorAll("a, button"))
+            .find(el => el.innerText.trim() === "更新する");
+        if (updateBtn) updateBtn.click();
+        else UI.log("⚠️ 未找到更新按钮");
+    }
+
+    // ④ 选择页
+    else if (location.href.includes("/freevps") && (location.href.includes("/compare") || location.href.includes("/extend/index"))) {
+        UI.log("选择页: 确认续期选项...");
+        await wait(2000);
+        const continueBtn = Array.from(document.querySelectorAll("a, button, input[type='submit']"))
+            .find(el => {
+                const txt = (el.innerText || el.value || "").replace(/\s/g, "");
+                return txt.includes("無料VPS") && txt.includes("継続");
+            });
+        if (continueBtn) continueBtn.click();
+    }
+
+    // ⑤ 验证/确认/执行页
+    else if (location.href.includes("/freevps/extend")) {
+        UI.log("🌸 进入处理流程..."); 
+        await wait(1000);
+
+        const newExpiry = extractNewExpiryFromConf();
+        if (newExpiry) {
+            UI.updateExpiry(newExpiry);
+            UI.log(`📅 更新后的利用期限: ${newExpiry}`);
+        }
+
+        // 🟢 智能排期捕获 (验证页)
+        if (document.body.innerText.includes("利用期限の1日前から") || document.body.innerText.includes("更新手続きが可能")) {
+            UI.log("⚠️ 提示: 未到续期时间");
+            
+            const nextDate = extractNextAllowedDate();
+            if (nextDate) {
+                STORE.nextRunDate = nextDate;
+                UI.log(`📅 已设置预约：下次运行时间锁定为 [${nextDate}]`);
+            }
+
+            if (STORE.lastRunDate !== bjTime.dateStr) sendTg(`⚠️ 未到续期时间。`); 
+            STORE.lastRunDate = getBeijingDate().dateStr;
+            setTimeout(() => { location.href = CONFIG.LOGIN_URL; }, 5000);
+            return; 
+        }
+
+        UI.log("🔍 正在等待验证码图片加载...");
+        let captchaImg = null;
+        for (let i = 0; i < 20; i++) { 
+            captchaImg = document.querySelector("img[src^='data:image']");
+            if (captchaImg) break;
+            await wait(500);
+        }
+
+        if (captchaImg) {
+            UI.log("✅ 发现验证码，执行OCR...");
+            const code = await ocrSolve(captchaImg.src);
+            if (code && code.length >= 4) {
+                const input = document.querySelector("input[type='text']") || document.querySelector("[placeholder*='上の画像']");
+                if (input) {
+                    input.value = code;
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    UI.log(`✅ 自动填入: ${code}`);
+                }
+            } else {
+                UI.log("❌ OCR无法识别，请手动输入。");
+            }
+        } else {
+            UI.log("ℹ️ 本页无验证码 (或是确认页)，直接寻找按钮...");
+        }
+
+        await wait(1000);
+
+        let loopCount = 0;
+        let hasClicked = false;
+        
+        const processInterval = setInterval(() => {
+            if (hasClicked) { clearInterval(processInterval); return; }
+            loopCount++;
+
+            const turnstileIframe = document.querySelector("iframe[src*='turnstile']");
+            if (turnstileIframe && loopCount % 5 === 0) try { turnstileIframe.click(); } catch(e){}
+
+            const inputField = document.querySelector("input[type='text']") || document.querySelector("[placeholder*='上の画像']");
+            if (inputField) {
+                const currentVal = inputField.value;
+                if (!currentVal || currentVal.length < 4) {
+                    if (loopCount % 5 === 0) UI.log("⏳ 等待验证码填入...");
+                    if (loopCount >= 180) { 
+                         clearInterval(processInterval);
+                         UI.log("❌ 超时未填入，停止。");
+                    }
+                    return; 
+                }
+            }
+
+            let validSubmitBtn = document.getElementById('submit_button');
+            if (!validSubmitBtn) {
+                const candidates = Array.from(document.querySelectorAll("input[type='submit'], button, a.btn"));
+                validSubmitBtn = candidates.find(el => {
+                    const text = (el.value || el.innerText || "").replace(/\s+/g, "");
+                    return text.includes("継続") || 
+                           text.includes("更新") || 
+                           text.includes("確定") || 
+                           text.includes("無料VPS") ||
+                           el.classList.contains('btn--primary');
+                });
+            }
+
+            if (validSubmitBtn) {
+                hasClicked = true;
+                clearInterval(processInterval);
+                UI.log(`🚀 找到按钮 [${validSubmitBtn.id || validSubmitBtn.value || "Button"}]，点击提交...`);
+                validSubmitBtn.style.border = "5px solid green";
+                
+                setTimeout(() => {
+                    validSubmitBtn.click();
+                    UI.log("✅ 点击动作完成...");
+                    
+                    STORE.nextRunDate = ""; 
+                    STORE.lastRunDate = getBeijingDate().dateStr;
+                    sendTg("✅ 续期提交操作已执行！请明日确认状态。");
+                    
+                    setTimeout(() => { location.href = CONFIG.LOGIN_URL; }, 5000);
+                }, 300);
+            }
+
+            if (loopCount >= 200) clearInterval(processInterval);
+        }, 1000);
+    } 
+
+    // ⑦ 完成页
+    else if (location.href.includes("complete") || document.body.innerText.includes("完了")) {
+         STORE.lastRunDate = getBeijingDate().dateStr;
+         sendTg("✅ 续期流程圆满完成！");
+         UI.log("🌸 流程结束，返回待机。");
+         setTimeout(() => { location.href = CONFIG.LOGIN_URL; }, 5000);
+    }
+})();
