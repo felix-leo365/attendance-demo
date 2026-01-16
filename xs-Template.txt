@@ -26,8 +26,8 @@
         PASSWORD: "",   // 例如: your_password
 
         // 🔵 Telegram 推送配置 (选填，不填则不推送)
-        TG_TOKEN: "",   // 例如: 123456789:ABCDefGhI...
-        TG_ID: "",      // 例如: 12345678
+        TG_TOKEN: "7425032752:AAH-txk6YNWCgwwxDqV4gghp4A_Khl9OQfc",   // 例如: 123456789:ABCDefGhI...
+        TG_ID: "6975394604",      // 例如: 12345678
 
         // 🟡 系统配置
         CAPTCHA_API: "https://captcha-120546510085.asia-northeast1.run.app",
